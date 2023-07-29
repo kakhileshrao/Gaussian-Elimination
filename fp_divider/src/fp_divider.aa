@@ -1,0 +1,45 @@
+
+$constant INITIAL_VAL:$uint<6>:=0
+$pipe iteration_duration_indicator: $uint<1> $signal
+$pipe initguess_computation_duration: $uint<1> $signal
+
+$module [fp_divider] 
+$in (a b:$float<8,23>) 
+$out (quotient:$float<8,23>) $is
+{
+	initguess_computation_duration:=1
+	exp_b:=($slice ($bitcast ($uint<32>) b) 31 23)
+	exp_init:=(254-exp_b)
+	init:=(exp_init && $zero<23>)
+	init_float:=($bitcast ($float<8,23>) init)
+	
+	$branchblock[loop]{
+		initguess_computation_duration:=0
+		$merge $entry loopback
+				$phi y := init_float $on $entry next_y $on loopback
+				$phi count := INITIAL_VAL $on $entry next_count $on loopback
+		$endmerge
+        
+        iteration_duration_indicator:=1
+
+		next_y :=  (y*(_f2.0e+0-(b*y))) 
+
+		
+		$volatile next_count := (count + 1)
+
+		//continue_flag := (count < 15)
+			continue_flag :=((count < 11)&($mux((y-next_y)>=_f0.0e+0) ((y-next_y)>=_f1.0e-6) ((y-next_y)<=_f1.0e-6))) 
+       
+		$if continue_flag $then
+		iteration_duration_indicator:=0
+        	$place[loopback]
+		$endif
+	} (y=>y next_y=>next_y next_count=>next_count)
+	
+	quotient:= (a*next_y)
+	
+	//$rreport(fp_divider var a b quotient init_float y next_y next_count)
+	$rreport(fp_divider var a b quotient next_count)
+}
+
+

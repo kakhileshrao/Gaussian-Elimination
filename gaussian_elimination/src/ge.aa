@@ -1,0 +1,255 @@
+
+/////////////////////////////////////////Floating Point Divider Code starts here///////////////////////////////////////////////
+$constant INITIAL_VAL:$uint<6>:=0
+
+$module [fp_divider] 
+$in (a b:$float<8,23>) 
+$out (quotient:$float<8,23>) $is
+{
+	//extracting the exponential part of b and reversing its sign for initial guess
+	exp_b:=($slice ($bitcast ($uint<32>) b) 31 23)
+	exp_init:=(254-exp_b)
+	init:=(exp_init && $zero<23>)
+	init_float:=($bitcast ($float<8,23>) init)
+	
+	$branchblock[loop]{
+		$merge $entry loopback
+				$phi y := init_float $on $entry next_y $on loopback
+				$phi count := INITIAL_VAL $on $entry next_count $on loopback
+		$endmerge
+
+		next_y :=  (y*(_f2.0e+0-(b*y))) 
+
+		$volatile next_count := (count + 1)
+
+		//continue_flag := (count < 15)
+			continue_flag :=((count < 11)&($mux((y-next_y)>=_f0.0e+0) ((y-next_y)>=_f1.0e-6) ((y-next_y)<=_f1.0e-6))) 
+
+		$if continue_flag $then
+        	$place[loopback]
+		$endif
+	} (next_y=>next_y)
+	
+	quotient:= (a*next_y)
+	//$rreport(fp_divider var a b quotient init_float y next_y next_count)
+	//$rreport(fp_divider var a b quotient next_count)
+}
+///////////////////////////////////////////////////////////////Floating point divider ends here/////////////////////////////////////////////////
+
+
+/////////////////////////////////////////////////////////////guassian elimination code starts here/////////////////////////////////////////////
+$storage an:$array[16][17] $of $float<8,23>
+//$storage bn:$array[16][1] $of $float<8,23>
+$storage x:$array[16] $of $float<8,23>
+//$storage x:$array[16][1] $of $float<8,23>
+$pipe input_data: $float<8,23>$depth 16
+$pipe output_data: $float<8,23> $depth 16
+
+$pipe cycle_indicator: $uint<1> $signal
+
+$module [ge] 
+	$in () 
+	$out () $is
+{
+
+$branchblock[loop] {
+	//to get input from pipe
+	//$dopipeline $depth 15 $fullrate
+    $merge $entry  loopback
+        $phi q := $zero<16> $on $entry nq $on loopback
+    $endmerge
+
+			//$dopipeline $depth 15 $fullrate
+			$branchblock[loopn] {
+    		$merge $entry  loopbackn
+        		$phi w := $zero<16> $on $entry nw $on loopbackn
+    		$endmerge
+        	$volatile nw := (w + 1) 
+			an[q][w] := input_data
+			continue_flagn := (w < 16)
+			$if continue_flagn $then
+        	$place[loopbackn]
+			$endif
+			}
+    		//$while (w < 3)
+
+        $volatile nq := (q + 1) 
+
+   // $while (q < 15)
+	continue_flag1 := (q < 15)
+	$if continue_flag1 $then
+        	$place[loopback]
+	$endif
+}
+
+	//Main code
+	//1st merge
+	cycle_indicator:=1
+	$branchblock[loop3] {
+	$merge $entry loopback3
+		$phi f:= $zero<16> $on $entry nf $on loopback3
+	$endmerge
+			aaa:=an[f][f]
+			//2nd merge inside 1st
+			$branchblock[loop4] {
+			$merge $entry loopback4
+				$phi g:= f $on $entry ng $on loopback4
+			$endmerge
+			
+			an[f][g]:=($call fp_divider (an[f][g] aaa))
+			//$call fp_divider (xx yy) (zz)
+			//x[f][g]:=
+		    
+				$volatile ng:=(g+1)
+				continue_flag4:= (g < 16)
+				$if continue_flag4 $then
+        		$place[loopback4]
+				$endif
+				}//2nd merge inside 1st ENDS
+//////
+
+		$if (f<15) $then
+			//3rd merge inside 1st
+			$branchblock[loop5] {
+			$merge $entry loopback5
+				$phi h:= (f+1) $on $entry nh $on loopback5
+			$endmerge
+					
+					//4th merge inside 3rd
+					$branchblock[loop6] {
+					$merge $entry loopback6
+					$phi i:= 16 $on $entry ni $on loopback6
+					$endmerge
+						$parallelblock[p1] {
+						an[h][i]:=(an[h][i]-(an[h][f]*an[f][i]))
+						an[(h+1)][i]:=(an[(h+1)][i]-(an[(h+1)][f]*an[f][i]))
+						an[(h+2)][i]:=(an[(h+2)][i]-(an[(h+2)][f]*an[f][i]))
+						an[(h+3)][i]:=(an[(h+3)][i]-(an[(h+3)][f]*an[f][i]))
+						an[(h+4)][i]:=(an[(h+4)][i]-(an[(h+4)][f]*an[f][i]))
+						// an[(h+5)][i]:=(an[(h+5)][i]-(an[(h+5)][f]*an[f][i]))
+						// an[(h+6)][i]:=(an[(h+6)][i]-(an[(h+6)][f]*an[f][i]))
+						// an[(h+7)][i]:=(an[(h+7)][i]-(an[(h+7)][f]*an[f][i]))
+						}
+					$volatile ni:=(i-1)
+					continue_flag6:= (i > f)
+					$if continue_flag6 $then
+        			$place[loopback6]
+					$endif
+					}//4th merge inside 3rd ENDS 
+
+
+				$volatile nh:=(h+5)
+				continue_flag5:= ((h+4) < 15)
+				$if continue_flag5 $then
+        		$place[loopback5]
+				$endif
+				}//3rd merge inside 1st ENDS
+		$endif	
+
+		$volatile nf:=(f+1)
+		continue_flag3 := (f < 15)
+		$if continue_flag3 $then
+        $place[loopback3]
+		$endif
+		}//1st merge ENDS
+
+
+x[15]:=an[15][16]
+
+$branchblock[loopout1] {
+ $merge $entry  loopbackout1
+        $phi j := $one<16> $on $entry nj $on loopbackout1
+    $endmerge
+
+				x[(15-j)]:=an[(15-j)][16]
+
+				$branchblock[loopout2] {
+ 					$merge $entry  loopbackout2
+        		$phi k := $zero<16> $on $entry nk $on loopbackout2
+    			$endmerge
+
+					x[(15-j)]:=(x[(15-j)]-(an[(15-j)][(15-k)]*x[(15-k)]))
+
+				$volatile nk:=(k+1)
+				continue_flagout2 := ((k+1)<j)
+				$if continue_flagout2 $then
+        		$place[loopbackout2]
+				$endif
+				}
+
+
+	    $volatile nj:=(j+1)
+		continue_flagout1 := (j< 15)
+		$if continue_flagout1 $then
+        $place[loopbackout1]
+		$endif
+}
+
+
+cycle_indicator:=0
+
+	//to send output to pipe
+	//$dopipeline $depth 15 $fullrate
+
+	$branchblock[loop11] {
+    $merge $entry  loopback11
+        $phi e1 := $zero<16> $on $entry ne1 $on loopback11
+    $endmerge
+
+			//$dopipeline $depth 15 $fullrate
+			$branchblock[loopm1] {
+    		$merge $entry  loopbackm1
+        		$phi r1 := $zero<16> $on $entry nr1 $on loopbackm1
+    		$endmerge
+        	$volatile nr1 := (r1 + 1) 
+			output_data:= an[e1][r1]
+			continue_flagm1 := (r1 < 16)
+			$if continue_flagm1 $then
+        	$place[loopbackm1]
+			$endif
+			}
+    		//$while (r1 < 3)
+        $volatile ne1 := (e1 + 1) 
+
+    //$while (e < 15)
+	continue_flag21 := (e1 < 15)
+	$if continue_flag21 $then
+        	$place[loopback11]
+	$endif
+	
+}
+
+
+	////////////////////////////
+	$branchblock[loop1] {
+    $merge $entry  loopback1
+        $phi e := $zero<16> $on $entry ne $on loopback1
+    $endmerge
+
+			//$dopipeline $depth 15 $fullrate
+			// $branchblock[loopm] {
+    		// $merge $entry  loopbackm
+        	// 	$phi r := $zero<8> $on $entry nr $on loopbackm
+    		// $endmerge
+        	// $volatile nr := (r + 1) 
+			// output_data:= an[e][r]
+			// continue_flagm := (r < 4)
+			// $if continue_flagm $then
+        	// $place[loopbackm]
+			// $endif
+			// }
+    		//$while (r < 3)
+			output_data:= x[e]
+        $volatile ne := (e + 1) 
+
+    //$while (e < 15)
+	continue_flag2 := (e < 15)
+	$if continue_flag2 $then
+        	$place[loopback1]
+	$endif
+	
+}
+
+
+
+}
